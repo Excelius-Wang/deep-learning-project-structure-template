@@ -3,19 +3,26 @@ import textwrap
 from pathlib import Path
 import jieba
 import torch
+import os
 from torch import nn
 from torch.nn import functional as F
 from torch.nn.modules.module import T
 
 from src.utils.logger import printlog
 
+# 移除固定GPU设置，改为自动检测可用GPU
 torch.manual_seed(42)
 
 # 超参数
-batch_size = 128  # 同时平行处理多少条独立数据（batch）
+batch_size = 64  # 同时平行处理多少条独立数据（batch）
 block_size = 256  # 训练、验证的字符串长度
+# 自动检测并设置设备
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-printlog(device)
+gpu_count = torch.cuda.device_count()
+printlog(f"当前使用设备: {device}")
+printlog(f"可用GPU数量: {gpu_count}")
+if gpu_count > 0 and device.type == 'cuda':
+    printlog(f"GPU型号: {torch.cuda.get_device_name(0)}")
 size = 16  # 几个值需要做嵌入
 n_embedding = 512  # 嵌入的维度，尽量为 2 的整数次幂
 n_heads = 8
@@ -23,7 +30,7 @@ n_layers = 12
 head_size = n_embedding // n_heads
 wrap_width = 50
 learning_rate = 3e-4
-max_iters = 1000
+max_iters = 3000
 eval_interval = int(max_iters / 10)
 eval_iters = 200
 dropout_value = 0.2
@@ -214,8 +221,15 @@ class LanguageModel(nn.Module):
 def main():
     printlog(f"训练内容：{file_name}")
     model = LanguageModel().to(device)  # 实例化
-
-    printlog(str(sum(p.numel() for p in model.parameters()) / 1e6) + " M parameters")  # 打印参数数量
+    
+    # 根据GPU数量自动适配多GPU训练
+    if torch.cuda.device_count() > 1:
+        printlog(f"使用 {torch.cuda.device_count()} 个GPU并行训练")
+        model = nn.DataParallel(model)
+    else:
+        printlog("使用单GPU训练")
+    
+    printlog(f"模型参数量: {sum(p.numel() for p in model.parameters()) / 1e6:.2f} M")  # 打印参数数量
 
     # 设定一个优化器
     optimizer = torch.optim.AdamW(model.parameters(), lr=learning_rate)
@@ -224,7 +238,7 @@ def main():
     for i in range(max_iters):
         if i % eval_interval == 0 or i == max_iters - 1:
             losses = estimate_loss(model)
-            print(f"step {i}: | train loss: {losses['train']:.4f} | val loss: {losses['val']:.4f}")
+            print(f"步骤 {i}: | 训练损失: {losses['train']:.4f} | 验证损失: {losses['val']:.4f}")
         # 取样
         xb, yb = get_batch('train')
         # 前向传播
