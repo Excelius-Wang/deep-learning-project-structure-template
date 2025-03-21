@@ -1,7 +1,7 @@
 import random
 import textwrap
 from pathlib import Path
-
+import jieba
 import torch
 from torch import nn
 from torch.nn import functional as F
@@ -13,12 +13,12 @@ torch.manual_seed(42)
 
 # 超参数
 batch_size = 128  # 同时平行处理多少条独立数据（batch）
-block_size = 512  # 训练、验证的字符串长度
+block_size = 256  # 训练、验证的字符串长度
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 printlog(device)
 size = 16  # 几个值需要做嵌入
-n_embedding = 1024  # 嵌入的维度，尽量为 2 的整数次幂
-n_heads = 16
+n_embedding = 512  # 嵌入的维度，尽量为 2 的整数次幂
+n_heads = 8
 n_layers = 12
 head_size = n_embedding // n_heads
 wrap_width = 50
@@ -37,26 +37,33 @@ printlog(str(file_name))
 with open(file_name, "r", encoding="utf-8") as f:
     text = f.read()  # str
 
-# 生成词表
-chars = sorted(list(set(text)))
-vocab_size = len(chars)
-printlog(str(vocab_size))
+# 使用jieba进行分词
+words = list(jieba.cut(text))
+printlog(f"分词后的词语数量: {len(words)}")
 
-# 获取字符与数字的投影
-char_to_idx = {ch: i for i, ch in enumerate(chars)}  # 符号到整数
-idx_to_char = {i: ch for i, ch in enumerate(chars)}  # 整数到符号
+# 生成词表
+vocab = sorted(list(set(words)))
+vocab_size = len(vocab)
+printlog(f"词表大小: {vocab_size}")
+
+# 获取词语与数字的投影
+word_to_idx = {word: i for i, word in enumerate(vocab)}  # 词语到整数
+idx_to_word = {i: word for i, word in enumerate(vocab)}  # 整数到词语
 
 
 def encode_text(_text):
-    return [char_to_idx[ch] for ch in _text]
+    # 对文本进行分词，然后将每个词转换为对应的索引
+    _words = list(jieba.cut(_text))
+    return [word_to_idx[word] for word in _words]
 
 
 def decode_text(index_list):
-    return ''.join([idx_to_char[i] for i in index_list])
+    # 将索引列表转换回词语，然后连接成文本
+    return ''.join([idx_to_word[i] for i in index_list])
 
 
 # 训练、验证分组
-data = torch.tensor(encode_text(text), dtype=torch.long)  # 整数表示字符
+data = torch.tensor(encode_text(text), dtype=torch.long)  # 整数表示词语
 split_factor = 0.8
 n = int(split_factor * len(data))  # 前 80%（比例系数）作为训练集
 train_data = data[:n]
@@ -64,12 +71,12 @@ val_data = data[n:]
 printlog(f"文件 {file_name} 读取完成...")
 
 
-# 模型的预测：输入当前字的时候，要预测下一个字，也就是说对于已经输入的所有内容，它的标签就是下一个字
+# 模型的预测：输入当前词的时候，要预测下一个词
 def get_batch(split):
     _data = train_data if split == 'train' else val_data
-    ix = torch.randint(len(data) - block_size, (batch_size,))
-    x = torch.stack([data[i:i + block_size] for i in ix])  # 输入值 batch
-    y = torch.stack([data[i + 1:i + block_size + 1] for i in ix])  # 标签 batch，把 x 后移一个字符，想要的输出值（target）
+    ix = torch.randint(len(_data) - block_size, (batch_size,))
+    x = torch.stack([_data[i:i + block_size] for i in ix])  # 输入值 batch
+    y = torch.stack([_data[i + 1:i + block_size + 1] for i in ix])  # 标签 batch，把 x 后移一个词，想要的输出值（target）
     x, y = x.to(device), y.to(device)
     return x, y
 
@@ -164,7 +171,7 @@ class LanguageModel(nn.Module):
         super().__init__()
         self.token_embedding_table = nn.Embedding(vocab_size, n_embedding)
         self.position_embedding_table = nn.Embedding(block_size, n_embedding)
-        self.blocks = nn.Sequential(*[Block(n_embedding, n_heads) for _ in range(n_layers)])   # 多残差多头注意力
+        self.blocks = nn.Sequential(*[Block(n_embedding, n_heads) for _ in range(n_layers)])  # 多残差多头注意力
         self.ln_f = nn.LayerNorm(n_embedding)  # final LayerNorm
         self.lm_head = nn.Linear(n_embedding, vocab_size, bias=False)
 
