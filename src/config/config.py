@@ -1,4 +1,5 @@
 import os
+import pathlib
 
 import torch
 
@@ -37,10 +38,8 @@ class TransformerConfig:
     LOAD_BEST_MODEL = False  # 不加载最佳模型
     DISABLE_CHECKPOINTS = True  # 完全禁用检查点功能
 
-    # 获取当前项目根路径
-
     # 文件路径
-    DATA_PATH = 'data/raw/Hong_Lou_Meng.txt'
+    DATA_PATH = os.path.abspath(os.path.dirname(os.getcwd())) + '/data/raw/Hong_Lou_Meng.txt'
 
     def __init__(self):
         """初始化配置，检测可用GPU数量"""
